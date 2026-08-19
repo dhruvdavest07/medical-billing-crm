@@ -1,73 +1,87 @@
-type RateLimitConfig = {
-  max: number;
-  windowMs: number;
-};
+/**
+ * Simple in-memory rate limiter.
+ * For production with multiple instances, replace with a Redis-backed implementation.
+ */
 
-type RateLimitResult = {
-  allowed: boolean;
-  remaining: number;
-  retryAfterSeconds: number;
-};
-
-type Entry = {
+interface RateLimitEntry {
   count: number;
   resetAt: number;
-};
-
-const globalStore = globalThis as typeof globalThis & {
-  __rateLimitStore?: Map<string, Entry>;
-};
-
-const store = globalStore.__rateLimitStore ?? new Map<string, Entry>();
-
-if (!globalStore.__rateLimitStore) {
-  globalStore.__rateLimitStore = store;
 }
 
-function now() {
-  return Date.now();
+const store = new Map<string, RateLimitEntry>();
+
+// Periodic cleanup of expired entries (every 5 minutes)
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+let lastCleanup = Date.now();
+
+function cleanup() {
+  const now = Date.now();
+  if (now - lastCleanup < CLEANUP_INTERVAL_MS) return;
+  lastCleanup = now;
+  for (const [key, entry] of store) {
+    if (now >= entry.resetAt) {
+      store.delete(key);
+    }
+  }
 }
 
-export function takeRateLimitToken(
+export interface RateLimitResult {
+  success: boolean;
+  remaining: number;
+  resetAt: number;
+}
+
+export function rateLimit(
   key: string,
-  config: RateLimitConfig,
+  limit: number,
+  windowMs: number,
 ): RateLimitResult {
-  const currentTime = now();
-  const current = store.get(key);
+  cleanup();
+  const now = Date.now();
 
-  if (!current || current.resetAt <= currentTime) {
-    store.set(key, {
-      count: 1,
-      resetAt: currentTime + config.windowMs,
-    });
+  const existing = store.get(key);
 
-    return {
-      allowed: true,
-      remaining: config.max - 1,
-      retryAfterSeconds: Math.ceil(config.windowMs / 1000),
-    };
+  if (!existing || now >= existing.resetAt) {
+    const resetAt = now + windowMs;
+    store.set(key, { count: 1, resetAt });
+    return { success: true, remaining: limit - 1, resetAt };
   }
 
-  if (current.count >= config.max) {
-    return {
-      allowed: false,
-      remaining: 0,
-      retryAfterSeconds: Math.max(
-        1,
-        Math.ceil((current.resetAt - currentTime) / 1000),
-      ),
-    };
+  if (existing.count >= limit) {
+    return { success: false, remaining: 0, resetAt: existing.resetAt };
   }
 
-  current.count += 1;
-  store.set(key, current);
-
-  return {
-    allowed: true,
-    remaining: Math.max(0, config.max - current.count),
-    retryAfterSeconds: Math.max(
-      1,
-      Math.ceil((current.resetAt - currentTime) / 1000),
-    ),
-  };
+  existing.count += 1;
+  return { success: true, remaining: limit - existing.count, resetAt: existing.resetAt };
 }
+
+/**
+ * Returns a Response-like object for rate-limited requests, or null if allowed.
+ * Usage:
+ *   const limited = rateLimitResponse(`comment:${userId}`, 10, 60_000);
+ *   if (limited) return limited;
+ */
+export function rateLimitResponse(
+  key: string,
+  limit: number,
+  windowMs: number,
+): NextResponse | null {
+  const result = rateLimit(key, limit, windowMs);
+  if (result.success) return null;
+
+  const retryAfter = Math.ceil((result.resetAt - Date.now()) / 1000);
+  return NextResponse.json(
+    { error: "Rate limit exceeded. Please try again later." },
+    {
+      status: 429,
+      headers: {
+        "Retry-After": String(retryAfter),
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": String(result.resetAt),
+      },
+    },
+  );
+}
+
+// Late import to avoid circular dependency issues
+import { NextResponse } from "next/server";

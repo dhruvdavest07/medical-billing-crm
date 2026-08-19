@@ -9,12 +9,16 @@ A medical billing CRM built on top of [OpenHealthCRM](https://github.com/pras752
 - **Database**: PostgreSQL with Prisma 7 ORM
 - **Auth**: Auth.js (NextAuth) with role-based access control
 - **Multi-tenant**: Organization-scoped data throughout
+- **Storage**: S3-compatible (AWS S3, Cloudflare R2, MinIO) with local fallback
+- **Clearinghouse**: Availity integration with mock provider for development
 
 ## Prerequisites
 
-- Node.js 18+ (Node 20 recommended)
+- Node.js 18 +(Node 20 recommended)
 - PostgreSQL 14+ (or Neon/Supabase cloud Postgres)
 - npm or yarn
+- Optional: S3-compatible bucket for document storage
+- Optional: Availity API credentials for claim submission
 
 ## Quick Start
 
@@ -23,6 +27,9 @@ A medical billing CRM built on top of [OpenHealthCRM](https://github.com/pras752
 git clone https://github.com/dhruvdavest07/medical-billing-crm.git
 cd medical-billing-crm
 npm install
+
+# Install factory-added dependencies
+npm install @dnd-kit/core @dnd-kit/sortable @dnd-kit/modifiers @dnd-kit/utilities @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
 
 # 2. Set up environment variables
 cp .env.example .env.local
@@ -35,147 +42,28 @@ DATABASE_URL="postgresql://user:password@localhost:5432/medical_billing_crm?sche
 NEXTAUTH_SECRET="generate-with-openssl-rand-base64-32"
 NEXTAUTH_URL="http://localhost:3000"
 SKIP_DB_INIT=""
-```
 
-```bash
-# 3. Run database migrations
-npx prisma migrate deploy
-
-# 4. Seed the database (creates demo org, users, patients, facilities)
-npm run db:seed
-
-# 5. Start the dev server
-npm run dev
-```
-
-Open http://localhost:3000
-
-## Demo Credentials
-
-After seeding, log in with:
-
-| Email | Password | Role |
-|-------|----------|------|
-| admin@acmeclinic.com | admin123 | Super Admin |
-| ops@acmeclinic.com | admin123 | Operations |
-| billing@acmeclinic.com | admin123 | Biller |
-
-## Features
-
-### Billing Orders (`/orders`)
-- Create, search, and filter billing orders
-- Search by order number, patient name, MRN, or claim number
-- Filter by status (new, in_progress, submitted, pending, paid, denied, completed)
-- Per-day age indicator (turns orange when an order is older than 3 days)
-- Priority field for manual ordering
-
-### Order Detail (`/orders/:id`)
-Two-column layout matching the client's requirements:
-
-**Right side (Patient & Order):**
-- Patient details (name, DOB, MRN, contact info)
-- Dates of service (start/end, claim number, priority)
-- Comment timeline â€” post comments, view who said what and when
-- Document upload â€” attach files to the order
-
-**Left side (Facility/Provider):**
-- Medical provider/facility name, contact, address
-- Facility particular instructions
-- Third-party processor / clearinghouse info
-- Facility-specific comment box for notes and reminders
-
-### Admin Dashboard (`/admin`)
-- Summary cards: active orders, employees working, completed today, targets missed
-- Order status distribution
-- Active orders priority queue with editable priority
-- Employee work tracking (collapsible â€” shows recent orders per employee)
-- Target tracking (daily target vs actual, achieved/not achieved)
-
-### Roles & Permissions
-The system uses RBAC with these roles:
-- **Super Admin** â€” full access to everything
-- **Doctor** â€” clinical access
-- **Nurse** â€” clinical access
-- **Receptionist** â€” patient management
-- **Biller** â€” billing and orders access
-- **Pharmacist** â€” inventory and prescriptions
-
-## Database Schema
-
-Key models added on top of OpenHealthCRM:
-
-```
-Facility          â€” medical providers (name, contact, instructions, third-party processor)
-BillingOrder      â€” the core order (orderNumber, patient, facility, status, priority, dates of service)
-OrderComment      â€” timeline comments on orders (author, text, timestamp)
-FacilityComment   â€” facility-specific notes (author, text, timestamp)
-EmployeeTarget    â€” daily/weekly targets per employee per month
-```
-
-The original OpenHealthCRM models (Patient, Invoice, InsuranceClaim, Task, Document, AuditLog, etc.) are all preserved.
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/orders` | List orders (search, filter by status/assignee) |
-| POST | `/api/orders` | Create a new billing order |
-| GET | `/api/orders/:id` | Get full order detail with relations |
-| PATCH | `/api/orders/:id` | Update order status/priority/assignee |
-| GET | `/api/orders/:id/comments` | List comments on an order |
-| POST | `/api/orders/:id/comments` | Post a comment on an order |
-| GET | `/api/facilities` | List facilities (search by name) |
-| POST | `/api/facilities` | Create a facility |
-| GET | `/api/facilities/:id/comments` | List facility comments |
-| POST | `/api/facilities/:id/comments` | Post a facility comment |
-| GET | `/api/employee-targets` | List targets with completion stats |
-| POST | `/api/employee-targets` | Set/update an employee target |
-| GET | `/api/admin/dashboard` | Aggregated dashboard data |
-
-## Project Structure
-
-```
-src/
-  app/
-    (dashboard)/
-      orders/page.tsx           â€” Order listing with search & filter
-      orders/[id]/page.tsx      â€” Order detail (two-column layout)
-      admin/page.tsx            â€” Admin dashboard
-    api/
-      orders/                   â€” Orders CRUD + comments
-      facilities/               â€” Facilities CRUD + comments
-      employee-targets/         â€” Target management
-      admin/dashboard/         â€” Dashboard aggregation
-  components/
-    ui/dashboard-with-collapsible-sidebar.tsx  â€” Sidebar with nav links
-  lib/
-    prisma.ts                   â€” Prisma client
-    org.ts                      â€” Organization context & auth
-    auth.ts                     â€” Permission helpers
-prisma/
-  schema.prisma                 â€” Full database schema
-  migrations/                   â€” SQL migrations
-  seed.js                       â€” Demo data seeder
-```
-
-## For AI Assistants (Claude/Cursor)
-
-This README is designed for easy handoff to AI coding assistants. Key context:
-
-- **Base project**: Forked from `pras75299/OpenHealthCRM` (MIT license)
-- **What was added**: 5 new Prisma models (Facility, BillingOrder, OrderComment, FacilityComment, EmployeeTarget), 7 API route files, 3 frontend pages, sidebar nav updates, 1 migration
-- **Patterns to follow**: All API routes use `getOrgId()` + `assertOrgScope()` for multi-tenant isolation, `hasPermission()` for RBAC, `logServerError()` for error logging, and `AuditLog` entries for mutations
-- **To add a new API route**: Copy the pattern from `src/app/api/orders/route.ts` â€” same imports, same try/catch, same org scoping
-- **To add a new page**: Create a `.tsx` file in `src/app/(dashboard)/`, use the existing UI components from `src/components/ui/`
-
-## What's Still Needed
-
-- Real-time comment updates via WebSocket/SSE (currently requires manual refresh)
-- S3 file storage configuration for document uploads (currently uses storage key)
-- Drag-and-drop priority reordering (currently uses numeric input)
-- Insurance claim integration with clearinghouse APIs
-- Facility CRUD page (facilities are created via API or linked to orders)
-
-## License
-
-MIT (inherited from OpenHealthCRM upstream)
+# Optional: S3 storage
+S3_BUCKET=""
+S3_REGION=""
+S3_ACCESS_KEY_ID=""
+S3_SECRET_ACCESS_KEY=""
+S3_ENDPOINT="‚‚ˆÈÜ[Û˜[ˆÛX\š[™Úİ\ÙH›İšY\‚ÓPT’S‘ÒÕTÑWÔ“Õ’QTH›[ØÚÈ‚URSUWĞÓQS•ÒQHˆ‚URSUWĞÓQS•ÔÑPÔ‘UHˆ‚URSUWĞTÑWÕT“Hˆ˜‚˜˜\ÚˆÈËˆ[ˆ]X˜\ÙHZYÜ˜][ÛœÂ›œš\ÛXHZYÜ˜]H\ŞB‚ˆÈˆÙYYH]X˜\ÙB›œH[ˆœÙYY‚ˆÈKˆİ\H]ˆÙ\™\‚›œH[ˆ]‚˜‚“Ü[ˆ‹ËÛØØ[ÜİŒÌ‚ˆÈÈ[[ÈÜ™Y[X[Â‚Y\ˆÙYY[™ËÙÈ[ˆÚ]‚‚Ÿ[XZ[\ÜİÛÜ™›ÛHŸKKKKKK_KKKKKKKKK_KKKKK_ŸYZ[XÛYXÛ[šXË˜ÛÛHYZ[ŒLŒÈİ\\ˆYZ[ˆŸÜĞXÛYXÛ[šXË˜ÛÛHYZ[ŒLŒÈÜ\˜][ÛœÈŸš[[™ĞXÛYXÛ[šXË˜ÛÛHYZ[ŒLŒÈš[\ˆ‚ˆÈÈ™X]\™\Â‚ˆÈÈÈš[[™ÈÜ™\œÈ
+ÛÜ™\œØ
+B‹HÜ™X]KÙX\˜Ú[™š[\ˆš[[™ÈÜ™\œÂ‹HÙX\˜ÚHÜ™\ˆ[X™\‹]Y[˜[YKT“‹ÜˆÛZ[H[X™\‚‹Hš[\ˆHİ]\È
+™]Ë[—Ü›ÙÜ™\ÜËİX›Z]Y[™[™ËZY[šYYÛÛ\]Y
+B‹H\‹Y^HYÙH[™XØ]Ü‚‹Hš[Üš]HšY[‹H
+Š‘˜YËX[™Y›Üš[Üš]H™[Ü™\š[™ÊŠˆšXH™ZÚ]‚ˆÈÈÈÜ™\ˆ]Z[
+ÛÜ™\œËÎšY
+B‚ˆÈÈÈ˜XÚ[]Y\È
+Ù˜XÚ[]Y\Ø
+B‹H[Ô•QYÙH›ÜˆYYXØ[˜XÚ[]Y\ËÜ›İšY\œÂ‹HÙX\˜ÚH˜[YB‹HÜ™X]H˜XÚ[]H[›[™B‹H˜XÚ[]H]Z[YÙHÚ]Y]X›H›Ü›K[šÙYš[[™ÈÜ™\œË[™˜XÚ[]H›İ\Â‹H[]H›İXİ[Ûˆ
+›ØÚÜÈYˆ[šÙYš[[™ÈÜ™\œÈ^\İ™]\›œÈJB‚ˆÈÈÈYZ[ˆ\Ú›Ø\™
+ØYZ[˜
+B‹Hİ[[X\HØ\™ËÜ™\ˆİ]\È\İšX][Û‹š[Üš]H]Y]YB‹H[\ŞYYHÛÜšÈ˜XÚÚ[™Ë\™Ù]˜XÚÚ[™Â‚ˆÈÈÈ™X[U[YH\]\È
+ÔÑJB‹HÜ™\ˆÛÛ[Y[Èİ™X[H]™HšXHÙ\™\‹TÙ[]™[Â‹H˜XÚ[]HÛÛ[Y[Èİ™X[H]™HšXHÔÑB‹H\ÙTÔÑPÛÛ[Y[Ø™XXİÛÚÈÚ]^Û™[X[˜XÚÛÙ™‚‚ˆÈÈÈØİ[Y[İÜ˜YÙB‹HÌËXÛÛ\]X›HXœİ˜Xİ[Û‹ØØ[˜[˜XÚÂ‹H][K][˜[Ù^H\ÛÛ][Û‚‹HİšXİš[H\H˜[Y][Û‹LPˆØ\‹HÚYÛ™YT“È›ÜˆÙXİ\™HİÛ›ØY‚‹KKB‚”ÙYH
+Š˜RWÒS‘Ñ‘‹›Y
+Šˆ›ÜˆRHÛÙ[™È\ÜÚ\İ[È[™
+Š˜ÑPÕT’UWĞUQUÔ‘TÔ•›Y
+Šˆ›ÜˆHÙXİ\š]H]Y]‚‚“RUXÙ[œÙH
+[š\š]Yœ›ÛHÜ[’X[Ô“H\İ™X[JB

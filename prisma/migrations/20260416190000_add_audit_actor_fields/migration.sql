@@ -1,0 +1,6 @@
+ALTER TABLE "AuditLog"
+ALTER COLUMN "userId" DROP NOT NULL;
+
+ALTER TABLE "AuditLog"
+ADD COLUMN "actorType" TEXT NOT NULL DEFAULT 'user',
+ADD COLUMN "actorIdentifier" TEXT;

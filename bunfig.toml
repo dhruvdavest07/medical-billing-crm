@@ -1,0 +1,7 @@
+[install]
+# Faster installs with fewer network requests
+cache = true
+
+[run]
+# Use Bun's native bundler for faster execution
+bun = true
